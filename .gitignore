@@ -4,3 +4,6 @@
 /config/__pycache__
 /helpers/__pycache__
 /microservices/__pycache__
+/test
+/controllers/__pycache__
+/routes/__pycache__
