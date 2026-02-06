@@ -108,12 +108,14 @@ def get_creg(serial_port):
 def get_cpin(serial_port):
     try:
         response, time_taken = send_at_command_fast("AT+CPIN?", serial_port)
-        if "READY" not in response:
+        if response is None or "READY" not in response:
             return "unknown"
         return "ready"
     except Exception as e:
         if "Access is denied" in str(e):
             return "access_denied"
+        elif "The system cannot find the file specified" in str(e):
+            return "file_not_found"
         print(f"Error parsing CPIN: {e}")
         print(traceback.format_exc())
         return None

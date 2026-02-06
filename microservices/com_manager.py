@@ -29,6 +29,9 @@ class ComPort:
                     print(f"PermissionError, sleep {retry_delay} seconds")
                     time.sleep(retry_delay)
                     continue
+                elif "The system cannot find the file specified" in str(e):
+                    print(f"The system cannot find the file specified, return False")
+                    return False
                 print(f"Error connecting to com port 123124523: {self.port}: {e}")
             except Exception as e:
                 print(f"Error connecting to com port {self.port}: {e}")
@@ -84,27 +87,34 @@ class ComManager:
     
     def get_com_have_sim(self):
         while True:
-            ports = serial.tools.list_ports.comports()
-            for com in list(self.com_ports):
-                if com not in [port.device for port in ports]:
-                    del self.com_ports[com]
-            for port in ports:
-                if "USB" not in port.description:
-                    continue
-                if port.device in list(self.com_ports):
-                    continue
-                cpin = at_command.get_cpin(port.device)
-                if cpin != "ready":
-                    continue
-                else:
-                    if port.device not in list(self.com_ports):
-                        print(f"Add com port: {port.device}, cpin: {cpin}")
-                        self.com_ports[port.device] = ComPort(port.device)
-            time.sleep(1)
-    
+            try:
+                ports = serial.tools.list_ports.comports()
+                for com in list(self.com_ports):
+                    if com not in [port.device for port in ports]:
+                        del self.com_ports[com]
+                for port in ports:
+                    if "USB" not in port.description:
+                        continue
+                    if port.device in list(self.com_ports):
+                        continue
+                    cpin = at_command.get_cpin(port.device)
+                    if cpin != "ready":
+                        continue
+                    else:
+                        if port.device not in list(self.com_ports):
+                            print(f"Add com port: {port.device}, cpin: {cpin}")
+                            self.com_ports[port.device] = ComPort(port.device)
+                time.sleep(1)
+            except Exception as e:
+                print(f"Error getting com ports: {e}")
+                print(traceback.format_exc())
+                time.sleep(5)
+                
+                
     def get_info_sim(self):
         while True:
             try:
+                print(f"Getting info sim, with {len(list(self.com_ports))} com ports")
                 for com in list(self.com_ports):
                     comport = ComPort(com)
                     _ = comport.connect()
@@ -113,7 +123,8 @@ class ComManager:
                     time_save = {}
                     result, time_taken = comport.write("AT+CPIN?")
                     if result is None or "READY" not in result:
-                        print(f"{com} is not ready, it is: {result}, remove from com ports")
+                        if result: result = "".join(result.splitlines()).strip()
+                        print(f"{com} is not ready [7395], it is: {result}, remove from com ports")
                         self.com_ports.pop(com, None)
                         continue
                     cpin = replace_data(result)
