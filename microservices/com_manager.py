@@ -3,10 +3,11 @@ import serial
 import serial.tools.list_ports
 from config import mongo_lite
 from helpers import at_command, re_string
-import time
+import time, logging
 import threading
 import traceback
 from database import sim_db
+logger = logging.getLogger(__name__)
 print_log = False
 def replace_data(str):
     str_tmp = str.replace("+CPIN: ", "").replace('OK', '').strip()
@@ -26,13 +27,13 @@ class ComPort:
                 return True
             except serial.SerialException as e:
                 if "PermissionError" in str(e):
-                    print(f"PermissionError, sleep {retry_delay} seconds")
+                    logger.error(f"PermissionError, sleep {retry_delay} seconds")
                     time.sleep(retry_delay)
                     continue
                 elif "The system cannot find the file specified" in str(e):
-                    print(f"The system cannot find the file specified, return False")
+                    logger.error(f"The system cannot find the file specified, return False")
                     return False
-                print(f"Error connecting to com port 123124523: {self.port}: {e}")
+                logger.error(f"Error connecting to com port 123124523: {self.port}: {e}")
             except Exception as e:
                 print(f"Error connecting to com port {self.port}: {e}")
                 print(traceback.format_exc())
@@ -42,7 +43,7 @@ class ComPort:
     
     def write(self, command, timeout: float = 2.0, expected: Optional[Iterable[str]] = ("OK", "ERROR"),):
         if self.ser is None:
-            print(f"Com port {self.port} is not connected")
+            logger.error(f"Com port {self.port} is not connected")
             return None, None
         expected = tuple(expected) if expected else ()
         time_start = time.time()
@@ -70,7 +71,7 @@ class ComPort:
             time_taken = time.time() - time_start
             return result, time_taken
         except Exception as e:
-            print(f"Error writing to com port {self.port}: {e}")
+            logger.error(f"Error writing to com port {self.port}: {e}")
             return None, None
         
     
@@ -82,22 +83,21 @@ class ComPort:
     
     def check_iccid(self, iccid: str):
         try:
-            name_func = "[ComPort][check_iccid]"
             sim = mongo_lite.sim_collection.find_one({"iccid": iccid})
             if not sim:
-                print(f"{name_func}: Sim not found for iccid: {iccid}")
+                logger.error(f"Sim not found for iccid: {iccid}")
                 return False
             db_com_port = sim["com_port"]
             db_iccid = sim["iccid"]
             now_iccid = at_command.get_iccid(self.ser)
-            print(f"{name_func}: Now iccid: {now_iccid}, db iccid: {db_iccid}")
+            logger.info(f"Now iccid: {now_iccid}, db iccid: {db_iccid}")
             if now_iccid != db_iccid:
-                print(f"{name_func}: Now iccid: {now_iccid}, db iccid: {db_iccid}, delete com port from database")
+                logger.info(f"Now iccid: {now_iccid}, db iccid: {db_iccid}, delete com port from database")
                 sim_db.delete_com_port(db_iccid)
                 return False
             return True
         except Exception as e:
-            print(f"Error checking iccid: {e}")
+            logger.error(f"Error checking iccid: {e}")
             return False
     
 
@@ -123,11 +123,11 @@ class ComManager:
                         continue
                     else:
                         if port.device not in list(self.com_ports):
-                            print(f"Add com port: {port.device}, cpin: {cpin}")
+                            logger.info(f"Add com port: {port.device}, cpin: {cpin}")
                             self.com_ports[port.device] = ComPort(port.device)
                 time.sleep(1)
             except Exception as e:
-                print(f"Error getting com ports: {e}")
+                logger.error(f"Error getting com ports: {e}")
                 print(traceback.format_exc())
                 time.sleep(5)
                 
@@ -135,7 +135,7 @@ class ComManager:
     def get_info_sim(self):
         while True:
             try:
-                print(f"Getting info sim, with {len(list(self.com_ports))} com ports")
+                logger.info(f"Getting info sim, with {len(list(self.com_ports))} com ports")
                 for com in list(self.com_ports):
                     comport = ComPort(com)
                     _ = comport.connect()
@@ -145,7 +145,7 @@ class ComManager:
                     result, time_taken = comport.write("AT+CPIN?")
                     if result is None or "READY" not in result:
                         if result: result = "".join(result.splitlines()).strip()
-                        print(f"{com} is not ready [7395], it is: {result}, remove from com ports")
+                        logger.error(f"{com} is not ready [7395], it is: {result}, remove from com ports")
                         self.com_ports.pop(com, None)
                         continue
                     cpin = replace_data(result)
@@ -185,12 +185,11 @@ class ComManager:
                     time.sleep(1)
                 time.sleep(5)
             except Exception as e:
-                print(f"Error getting info sim: {e}")
+                logger.error(f"Error getting info sim: {e}")
                 print(traceback.format_exc())
                 time.sleep(5)
             
     def get_balance_background(self):
-        name_func = "[ComManager][get_balance]"
         while True:
             try:
                 time_need_get_balance = time.time() - (3600 * 1)
@@ -205,17 +204,17 @@ class ComManager:
                 list_sims = list(sims_cursor)
                 len_list_sims = len(list_sims)
                 if len_list_sims > 0:
-                    print(f"Found {len_list_sims} sims to get balance")
+                    logger.info(f"Found {len_list_sims} sims to get balance")
                     for sim in list_sims:
                         at_command.get_balance(sim["iccid"])
             except Exception as e:
-                print(f"{name_func}: Error getting balance: {e}")
-                print(traceback.format_exc())
+                logger.error(f"Error getting balance: {e}")
+                logger.error(traceback.format_exc())
             time.sleep(5)
             
 
 def start_com_manager():
-    print("Starting com manager...")
+    logger.info("Starting com manager...")
     com_manager = ComManager()
     threading.Thread(target=com_manager.get_com_have_sim, daemon=True).start()
     threading.Thread(target=com_manager.get_info_sim, daemon=True).start()
