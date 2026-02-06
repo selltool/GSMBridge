@@ -6,7 +6,7 @@ from helpers import at_command, re_string
 import time
 import threading
 import traceback
-
+from database import sim_db
 print_log = False
 def replace_data(str):
     str_tmp = str.replace("+CPIN: ", "").replace('OK', '').strip()
@@ -72,12 +72,33 @@ class ComPort:
         except Exception as e:
             print(f"Error writing to com port {self.port}: {e}")
             return None, None
+        
     
     def disconnect(self):
         if self.ser is not None:
             self.ser.close()
             self.ser = None
         return True
+    
+    def check_iccid(self, iccid: str):
+        try:
+            name_func = "[ComPort][check_iccid]"
+            sim = mongo_lite.sim_collection.find_one({"iccid": iccid})
+            if not sim:
+                print(f"{name_func}: Sim not found for iccid: {iccid}")
+                return False
+            db_com_port = sim["com_port"]
+            db_iccid = sim["iccid"]
+            now_iccid = at_command.get_iccid(self.ser)
+            print(f"{name_func}: Now iccid: {now_iccid}, db iccid: {db_iccid}")
+            if now_iccid != db_iccid:
+                print(f"{name_func}: Now iccid: {now_iccid}, db iccid: {db_iccid}, delete com port from database")
+                sim_db.delete_com_port(db_iccid)
+                return False
+            return True
+        except Exception as e:
+            print(f"Error checking iccid: {e}")
+            return False
     
 
 
@@ -168,56 +189,34 @@ class ComManager:
                 print(traceback.format_exc())
                 time.sleep(5)
             
-    def get_balance(self):
+    def get_balance_background(self):
+        name_func = "[ComManager][get_balance]"
         while True:
             try:
+                time_need_get_balance = time.time() - (3600 * 1)
                 query = {
                     "$or": [
                         {"balance": None},
-                        {"balance_update_time": {"$lt": time.time() - (3600 * 24)}}
-                    ]
+                        {"balance_update_time": {"$lt": time_need_get_balance}}
+                    ],
+                    "com_port": {"$ne": None}
                 }
                 sims_cursor = mongo_lite.sim_collection.find(query).limit(10)
                 list_sims = list(sims_cursor)
-                for sim in list_sims:
-                    if "0,1" not in sim['creg'] and "0,5" not in sim['creg']:
-                        # print(f"Sim is not in home network, com port: {sim['com_port']}")
-                        continue
-                    print(f"Getting balance for sim: {sim['iccid']}, com port: {sim['com_port']}")
-                    comport = ComPort(sim["com_port"])
-                    comport.connect()
-                    result, time_taken = comport.write('AT+CUSD=1,"*101#",15', timeout=20, expected=("+CUSD:", "ERROR", "+CME ERROR"))
-                    if result is None:
-                        print(f"Error getting balance, com port: {sim['com_port']}")
-                        continue
-                    if "+CUSD:" not in result:
-                        print(f"Error getting balance, com port: {sim['com_port']}, result: {result}")
-                        continue
-                    result = "".join(result.splitlines()).replace("+CUSD:", "").strip()
-                    balance_dict = re_string.balance_to_dict(result, sim['iccid'])
-                    print(f"Balance: {balance_dict}, com port: {sim['com_port']}")
-                    comport.disconnect()
-                    mongo_lite.sim_collection.update_one(
-                        {"iccid": sim['iccid']},
-                        {
-                            "$set": {
-                                "balance": balance_dict['balance'],
-                                "balance_update_time": time.time(),
-                                "phone": balance_dict['phone'],
-                                "balance_raw": result
-                            }
-                        }, upsert=True)
-                    time.sleep(1)
+                len_list_sims = len(list_sims)
+                if len_list_sims > 0:
+                    print(f"Found {len_list_sims} sims to get balance")
+                    for sim in list_sims:
+                        at_command.get_balance(sim["iccid"])
             except Exception as e:
-                print(f"Error getting balance: {e}")
-                time.sleep(5)
+                print(f"{name_func}: Error getting balance: {e}")
+                print(traceback.format_exc())
+            time.sleep(5)
             
-            
-            # time.sleep(5)
-                
-com_manager = ComManager()
-threading.Thread(target=com_manager.get_com_have_sim, daemon=True).start()
-time.sleep(3)
-threading.Thread(target=com_manager.get_info_sim, daemon=True).start()
 
-threading.Thread(target=com_manager.get_balance, daemon=True).start()
+def start_com_manager():
+    print("Starting com manager...")
+    com_manager = ComManager()
+    threading.Thread(target=com_manager.get_com_have_sim, daemon=True).start()
+    threading.Thread(target=com_manager.get_info_sim, daemon=True).start()
+    threading.Thread(target=com_manager.get_balance_background, daemon=True).start()
