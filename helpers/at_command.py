@@ -5,6 +5,9 @@ from helpers import re_string
 from config import mongo_lite
 import logging
 from database import sim_db
+from datetime import datetime, timezone
+
+
 logger = logging.getLogger(__name__)
 
 def send_at_command_fast(
@@ -53,7 +56,7 @@ def send_at_command_fast_with_serial(ser: serial.Serial, command: str, timeout: 
 
     buffer = ""
     deadline = time.time() + timeout
-
+    result = None
     while time.time() < deadline:
         try:
             line = ser.readline().decode(errors="ignore")
@@ -215,7 +218,7 @@ def get_balance(iccid):
             {
                 "$set": {
                     "balance": balance_dict['balance'],
-                    "balance_update_time": time.time(),
+                    "balance_update_time": datetime.now(tz=timezone.utc),
                     "phone": balance_dict['phone'],
                     "balance_raw": result
                 }

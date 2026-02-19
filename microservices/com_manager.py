@@ -1,14 +1,21 @@
+from datetime import datetime, timezone, timedelta
 from typing import Iterable, Optional
 import serial
 import serial.tools.list_ports
+import os
 from config import mongo_lite
 from helpers import at_command, re_string
 import time, logging
 import threading
 import traceback
 from database import sim_db
+
+
 logger = logging.getLogger(__name__)
 print_log = False
+unique_id = os.environ["UNIQUE_ID"]
+
+
 def replace_data(str):
     str_tmp = str.replace("+CPIN: ", "").replace('OK', '').strip()
     return str_tmp
@@ -123,7 +130,7 @@ class ComManager:
                         continue
                     else:
                         if port.device not in list(self.com_ports):
-                            logger.info(f"Add com port: {port.device}, cpin: {cpin}")
+                            if print_log: logger.info(f"Add com port: {port.device}, cpin: {cpin}")
                             self.com_ports[port.device] = ComPort(port.device)
                 time.sleep(1)
             except Exception as e:
@@ -135,7 +142,7 @@ class ComManager:
     def get_info_sim(self):
         while True:
             try:
-                logger.info(f"Getting info sim, with {len(list(self.com_ports))} com ports")
+                if print_log: logger.info(f"Getting info sim, with {len(list(self.com_ports))} com ports")
                 for com in list(self.com_ports):
                     comport = ComPort(com)
                     _ = comport.connect()
@@ -178,8 +185,9 @@ class ComManager:
                         "csq": csq,
                         "cpsi": cpsi,
                         "com_port": com,
-                        "time_update_info_sim": time.time(),
-                        "time_save": time_save
+                        "time_update_info_sim": datetime.now(tz=timezone.utc),
+                        "time_save": time_save,
+                        "unique_id": unique_id
                     }
                     mongo_lite.sim_collection.update_one({"iccid": iccid}, {"$set": data_save}, upsert=True)
                     time.sleep(1)
@@ -187,20 +195,21 @@ class ComManager:
             except Exception as e:
                 logger.error(f"Error getting info sim: {e}")
                 print(traceback.format_exc())
-                time.sleep(5)
+            time.sleep(5)
             
     def get_balance_background(self):
         while True:
             try:
-                time_need_get_balance = time.time() - (3600 * 1)
+                lt_time = datetime.now(tz=timezone.utc) - timedelta(minutes=60)
                 query = {
                     "$or": [
                         {"balance": None},
-                        {"balance_update_time": {"$lt": time_need_get_balance}}
+                        {"balance_update_time": {"$lt": lt_time}},
+                        {"balance_update_time": None}
                     ],
                     "com_port": {"$ne": None}
                 }
-                sims_cursor = mongo_lite.sim_collection.find(query).limit(10)
+                sims_cursor = mongo_lite.sim_collection.find(query).limit(5)
                 list_sims = list(sims_cursor)
                 len_list_sims = len(list_sims)
                 if len_list_sims > 0:
@@ -212,6 +221,33 @@ class ComManager:
                 logger.error(traceback.format_exc())
             time.sleep(5)
             
+    def get_sms_background(self):
+        logger.info(f"Starting get SMS background, unique_id: {unique_id}")
+        from controllers import sms_manager
+        sms_class = sms_manager.SMSManager()
+        while True:
+            try:
+                lt_time = datetime.now(tz=timezone.utc) - timedelta(minutes=15)
+                query = {
+                    "sms_scan_status": True,
+                    "sms_scan_time": {"$gt": lt_time},
+                    "com_port": {"$ne": None},
+                    "unique_id": unique_id
+                }
+                sims_cursor = mongo_lite.sim_collection.find(query).limit(10)
+                list_sims = list(sims_cursor)
+                len_list_sims = len(list_sims)
+                if len_list_sims > 0:
+                    logger.info(f"Found {len_list_sims} sims to get sms")
+                    for sim in list_sims:
+                        _ = sms_class.get_sms_all(sim["iccid"])
+                        logger.info(f"Get SMS for sim: {sim['iccid']}, result: {_}")
+                        time.sleep(1)
+            except Exception as e:
+                logger.error(f"Error getting sms: {e}")
+                logger.error(traceback.format_exc())
+            time.sleep(5)
+            
 
 def start_com_manager():
     logger.info("Starting com manager...")
@@ -219,3 +255,4 @@ def start_com_manager():
     threading.Thread(target=com_manager.get_com_have_sim, daemon=True).start()
     threading.Thread(target=com_manager.get_info_sim, daemon=True).start()
     threading.Thread(target=com_manager.get_balance_background, daemon=True).start()
+    threading.Thread(target=com_manager.get_sms_background, daemon=True).start()

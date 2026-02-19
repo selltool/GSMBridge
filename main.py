@@ -18,6 +18,7 @@ async def lifespan(_: FastAPI):
     # 2. Đưa logic khởi chạy của bạn vào đây
     print("Starting GSM Bridge...")
     com_manager.start_com_manager()
+    ably_listen.start_ably_listen()
     # mongo_manager = mongo_lite.sim_collection
     # print("Mongo Manager started...")
     # threading.Thread(target=scan_com.scan_com, daemon=True).start()
